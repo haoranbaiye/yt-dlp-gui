@@ -1,0 +1,71 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install yt-dlp pyinstaller
+
+      - name: Download FFmpeg (essentials build)
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg.zip"
+          Expand-Archive -Path "ffmpeg.zip" -DestinationPath "ffmpeg_temp" -Force
+          $ffDir = Get-ChildItem -Path "ffmpeg_temp" -Directory | Select-Object -First 1
+          Copy-Item "$($ffDir.FullName)\bin\ffmpeg.exe" -Destination "."
+          Copy-Item "$($ffDir.FullName)\bin\ffprobe.exe" -Destination "."
+          Remove-Item -Recurse -Force "ffmpeg_temp", "ffmpeg.zip"
+
+      - name: Build single-file EXE with PyInstaller
+        run: |
+          pyinstaller --onefile --noconsole --clean `
+            --name "yt-dlp-GUI" `
+            --collect-submodules yt_dlp `
+            --add-binary "ffmpeg.exe;." `
+            --add-binary "ffprobe.exe;." `
+            main.py
+
+      - name: Verify EXE
+        run: |
+          $exe = "dist\yt-dlp-GUI.exe"
+          if (Test-Path $exe) {
+            $size = (Get-Item $exe).Length / 1MB
+            Write-Host "EXE built: $([math]::Round($size, 1)) MB"
+          } else {
+            Write-Error "EXE not found"
+            exit 1
+          }
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yt-dlp-GUI-windows
+          path: dist/yt-dlp-GUI.exe
+
+      - name: Create GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: yt-dlp GUI ${{ github.ref_name }}
+          files: dist/yt-dlp-GUI.exe
+          generate_release_notes: true
